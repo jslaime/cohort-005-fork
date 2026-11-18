@@ -46,15 +46,17 @@ export function FullLesson({ data }: { data: FullLessonData }) {
 
           <LessonVideo data={data} />
 
-          {/* Note — under the video, so the Student can write while they watch */}
-          {currentUserId && <LessonNote note={data.note} />}
-
           <LessonContent
             contentHtml={data.contentHtml}
             hasVideo={!!lesson.videoUrl}
           />
 
           {enrolled && currentUserId && <LessonActivity data={data} />}
+
+          {/* Notes sit beside Questions & Discussion so the page's two writing
+              surfaces read as one block (ticket #2). Keyed by lesson so a draft
+              typed on one lesson never carries over to the next. */}
+          {currentUserId && <LessonNote key={lesson.id} note={data.note} />}
 
           {/* Questions & Discussion — confidential to people with access */}
           <CommentThread
