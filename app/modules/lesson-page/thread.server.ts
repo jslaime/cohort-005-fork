@@ -55,6 +55,11 @@ export function getLessonThread(lessonId: number): ThreadComment[] {
   return topLevel.filter((c) => !c.deleted || c.replies.length > 0);
 }
 
+/**
+ * Renders every comment body to sanitised HTML, preserving the reply nesting.
+ * Comments are untrusted input, so this must be renderComment — never
+ * renderMarkdown, which lets raw HTML through for trusted lesson content.
+ */
 export async function renderThread(
   nodes: ThreadComment[]
 ): Promise<RenderedComment[]> {

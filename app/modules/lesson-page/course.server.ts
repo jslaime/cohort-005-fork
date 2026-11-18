@@ -42,10 +42,6 @@ export function getModuleById(id: number) {
   return db.select().from(modules).where(eq(modules.id, id)).get();
 }
 
-/**
- * The course named by this route's slug, through this lesson. A lesson in
- * another course, or a malformed lesson id, counts as not found.
- */
 export function getUserById(id: number) {
   return db.select().from(users).where(eq(users.id, id)).get();
 }
