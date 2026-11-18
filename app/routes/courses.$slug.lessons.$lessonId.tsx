@@ -16,8 +16,6 @@ import { isBookmarked, toggleBookmark } from "~/lib/bookmarks.server";
 import { getNote, saveNote } from "~/lib/notes.server";
 import { MAX_NOTE_LENGTH } from "~/lib/notes";
 import { db } from "~/db";
-import { quizzes } from "~/db/schema";
-import { eq } from "drizzle-orm";
 import { Button } from "~/components/ui/button";
 import { AlertTriangle } from "lucide-react";
 import { renderMarkdown } from "~/lib/markdown.server";
@@ -47,7 +45,9 @@ import {
 } from "~/modules/lesson-page/thread.server";
 import {
   getQuizByLessonId,
-  getQuizWithQuestions,
+  getQuizForLearner,
+  getQuizForLesson,
+  type LearnerQuiz,
   getBestAttempt,
   computeResult,
 } from "~/modules/lesson-page/quiz.server";
@@ -221,40 +221,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   // Check for quiz attached to this lesson
   const quizRecord = getQuizByLessonId(lessonId);
-  let quiz: {
-    id: number;
-    title: string;
-    passingScore: number;
-    questions: Array<{
-      id: number;
-      questionText: string;
-      questionType: string;
-      position: number;
-      options: Array<{ id: number; optionText: string }>;
-    }>;
-  } | null = null;
+  let quiz: LearnerQuiz | null = null;
   let bestAttempt: { score: number; passed: boolean } | null = null;
 
   if (quizRecord) {
-    const quizData = getQuizWithQuestions(quizRecord.id);
-    if (quizData) {
-      // Strip isCorrect from options so answers aren't leaked to the client
-      quiz = {
-        id: quizData.id,
-        title: quizData.title,
-        passingScore: quizData.passingScore,
-        questions: quizData.questions.map((q) => ({
-          id: q.id,
-          questionText: q.questionText,
-          questionType: q.questionType,
-          position: q.position,
-          options: q.options.map((o) => ({
-            id: o.id,
-            optionText: o.optionText,
-          })),
-        })),
-      };
-    }
+    quiz = getQuizForLearner(quizRecord.id);
 
     if (currentUserId) {
       const best = getBestAttempt(currentUserId, quizRecord.id);
@@ -431,10 +402,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     if (isNaN(quizId)) {
       throw data("Invalid quiz ID", { status: 400 });
     }
-    // Scope the quiz to this lesson so a quiz elsewhere can't be reached by
-    // posting its id to this route.
-    const quiz = db.select().from(quizzes).where(eq(quizzes.id, quizId)).get();
-    if (!quiz || quiz.lessonId !== lessonId) {
+    if (!getQuizForLesson(quizId, lessonId)) {
       throw data("Quiz not found", { status: 404 });
     }
 

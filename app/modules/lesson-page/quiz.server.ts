@@ -6,33 +6,72 @@ import {
   quizAttempts,
   quizAnswers,
 } from "~/db/schema";
-import { and, desc, eq } from "drizzle-orm";
+import { desc, eq, inArray, and } from "drizzle-orm";
 
 export function getQuizByLessonId(lessonId: number) {
   return db.select().from(quizzes).where(eq(quizzes.lessonId, lessonId)).get();
 }
 
-export function getQuizWithQuestions(quizId: number) {
+/**
+ * The quiz with this id, but only if it belongs to this lesson, so a quiz
+ * elsewhere can't be reached by posting its id to another lesson's route.
+ */
+export function getQuizForLesson(quizId: number, lessonId: number) {
+  return db
+    .select()
+    .from(quizzes)
+    .where(and(eq(quizzes.id, quizId), eq(quizzes.lessonId, lessonId)))
+    .get();
+}
+
+/**
+ * The quiz as a learner may see it: `isCorrect` is left off every option so
+ * the answers never reach the browser.
+ */
+export function getQuizForLearner(quizId: number) {
   const quiz = db.select().from(quizzes).where(eq(quizzes.id, quizId)).get();
   if (!quiz) return null;
 
+  const questions = getQuestionsWithOptions(quizId);
+  return {
+    id: quiz.id,
+    title: quiz.title,
+    passingScore: quiz.passingScore,
+    questions: questions.map((q) => ({
+      id: q.id,
+      questionText: q.questionText,
+      questionType: q.questionType,
+      position: q.position,
+      options: q.options.map((o) => ({ id: o.id, optionText: o.optionText })),
+    })),
+  };
+}
+
+export type LearnerQuiz = NonNullable<ReturnType<typeof getQuizForLearner>>;
+
+function getQuestionsWithOptions(quizId: number) {
   const questions = db
     .select()
     .from(quizQuestions)
     .where(eq(quizQuestions.quizId, quizId))
     .orderBy(quizQuestions.position)
     .all();
+  if (questions.length === 0) return [];
 
-  const questionsWithOptions = questions.map((question) => {
-    const options = db
-      .select()
-      .from(quizOptions)
-      .where(eq(quizOptions.questionId, question.id))
-      .all();
-    return { ...question, options };
-  });
-
-  return { ...quiz, questions: questionsWithOptions };
+  const options = db
+    .select()
+    .from(quizOptions)
+    .where(
+      inArray(
+        quizOptions.questionId,
+        questions.map((q) => q.id)
+      )
+    )
+    .all();
+  return questions.map((question) => ({
+    ...question,
+    options: options.filter((o) => o.questionId === question.id),
+  }));
 }
 
 export function getBestAttempt(userId: number, quizId: number) {
@@ -74,13 +113,7 @@ export function computeResult(
       return null;
     }
 
-    const questions = db
-      .select()
-      .from(quizQuestions)
-      .where(eq(quizQuestions.quizId, quizId))
-      .orderBy(quizQuestions.position)
-      .all();
-
+    const questions = getQuestionsWithOptions(quizId);
     const questionResults = questions.map((q) =>
       gradeQuestion(q, selectedAnswers[q.id])
     );
@@ -111,8 +144,14 @@ export function computeResult(
   }
 }
 
+type GradableQuestion = {
+  id: number;
+  questionType: string;
+  options: Array<{ id: number; isCorrect: boolean }>;
+};
+
 function gradeQuestion(
-  q: { id: number; questionType: string },
+  q: GradableQuestion,
   selected: number | undefined
 ): QuestionResult {
   if (!selected) {
@@ -133,30 +172,11 @@ function gradeQuestion(
   };
 }
 
-function findCorrectOptionId(q: {
-  id: number;
-  questionType: string;
-}): number | null {
-  if (q.questionType === "multiple_choice") {
-    const opts = db
-      .select()
-      .from(quizOptions)
-      .where(eq(quizOptions.questionId, q.id))
-      .all();
-    const correctOpt = opts.find((o) => o.isCorrect === true);
-    return correctOpt ? correctOpt.id : null;
+function findCorrectOptionId(q: GradableQuestion): number | null {
+  if (q.questionType !== "multiple_choice" && q.questionType !== "true_false") {
+    return null;
   }
-  if (q.questionType === "true_false") {
-    const correctOpt = db
-      .select()
-      .from(quizOptions)
-      .where(
-        and(eq(quizOptions.questionId, q.id), eq(quizOptions.isCorrect, true))
-      )
-      .get();
-    return correctOpt ? correctOpt.id : null;
-  }
-  return null;
+  return q.options.find((o) => o.isCorrect)?.id ?? null;
 }
 
 function saveAttempt(
@@ -168,26 +188,29 @@ function saveAttempt(
   },
   questionResults: QuestionResult[]
 ): number {
-  const attempt = db
-    .insert(quizAttempts)
-    .values(attemptValues)
-    .returning()
-    .get();
+  // The attempt and its answers land together or not at all: an attempt with
+  // no answers would show a score nobody can review.
+  return db.transaction((tx) => {
+    const attempt = tx
+      .insert(quizAttempts)
+      .values(attemptValues)
+      .returning()
+      .get();
 
-  for (const result of questionResults) {
-    if (result.selectedOptionId !== null) {
-      db.insert(quizAnswers)
-        .values({
-          attemptId: attempt.id,
-          questionId: result.questionId,
-          selectedOptionId: result.selectedOptionId,
-        })
-        .run();
+    for (const result of questionResults) {
+      if (result.selectedOptionId !== null) {
+        tx.insert(quizAnswers)
+          .values({
+            attemptId: attempt.id,
+            questionId: result.questionId,
+            selectedOptionId: result.selectedOptionId,
+          })
+          .run();
+      }
     }
-  }
-  return attempt.id;
+    return attempt.id;
+  });
 }
-
 /**
  * Renders every comment body to sanitised HTML, preserving the reply nesting.
  * Comments are untrusted input, so this must be renderComment — never
