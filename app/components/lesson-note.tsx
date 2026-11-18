@@ -65,7 +65,7 @@ function LessonNoteHeading() {
       <div>
         <h2 className="text-xl font-semibold">Your notes</h2>
         <p className="text-sm text-muted-foreground">
-          Private to you. Jot things down while you watch.
+          Private to you. Jot down what you want to remember from this lesson.
         </p>
       </div>
     </div>
